@@ -1,0 +1,9 @@
+archive/*
+dataset_output_for_*/*
+engine_knee_plots_multi/*
+engine_knee_plots_multi_no_normal/*
+plots/*
+
+archive.zip
+
+.vscode/*
