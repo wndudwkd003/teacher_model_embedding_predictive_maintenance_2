@@ -198,6 +198,7 @@ def apply_masking_scenario(phase: str, X_df: pd.DataFrame, train_perm_idx: np.nd
         masked_idx = train_perm_idx[:, :scen]
         masked_X[np.arange(row_count)[:, None], masked_idx] = -1
         masked_raw_X_df = pd.DataFrame(masked_X, columns=X_df.columns)
+        current_scen_X_df = masked_raw_X_df.copy()
 
         # raw 데이터 저장
         raw_dir = get_scen_raw_path(scen, "RAW")
@@ -214,7 +215,7 @@ def apply_masking_scenario(phase: str, X_df: pd.DataFrame, train_perm_idx: np.nd
         raw_y_df.to_csv(os.path.join(raw_dir, f"y_{phase}.csv"), index=False)
 
         # json 데이터 변환
-        json_strings = [json.dumps(row) for row in masked_raw_X_df.to_dict(orient="records")]
+        json_strings = [json.dumps(row) for row in current_scen_X_df.to_dict(orient="records")]
         printi(f"length: {len(json_strings)}")
 
         # 임베딩 추출

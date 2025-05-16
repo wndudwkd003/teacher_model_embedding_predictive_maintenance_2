@@ -7,3 +7,6 @@ plots/*
 archive.zip
 
 .vscode/*
+
+output_result
+dataset_output_for_train

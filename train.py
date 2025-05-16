@@ -1,283 +1,117 @@
-# =========================================================
-#  Tabular models: LightGBM · XGBoost · TabNet · FT-Transformer
-#  with / without SMOTE on FD001+FD003 데이터만 사용
-# =========================================================
-
-
-
-import pandas as pd, numpy as np, torch, warnings, os
-from pathlib import Path
-from sklearn.preprocessing import MinMaxScaler
+import os
+import random
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple, Union
+from datetime import datetime
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import xgboost as xgb
+from sklearn.metrics import (accuracy_score, f1_score, precision_score,
+                             recall_score)
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, f1_score, classification_report
-from imblearn.over_sampling import SMOTE
-import lightgbm as lgb, xgboost as xgb
-from pytorch_tabnet.tab_model import TabNetClassifier
-from tab_transformer_pytorch import FTTransformer, TabTransformer
-warnings.filterwarnings('ignore')
-torch.manual_seed(42)
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-
-# ---------- 경로 ----------
-CSV_IN      = Path('/dev/hdd/user/kjy/pi2/engine_knee_plots_multi/all_engines_labeled.csv')
-METRIC_CSV  = Path('model_results.csv')
-REPORT_DIR  = Path('reports'); REPORT_DIR.mkdir(exist_ok=True)
-
-EPOCHS_TAB  = 200
-EPOCHS_FT   = 200
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"[INFO] Using device: {device}")
+from torch.utils.data import DataLoader
 
 
-# ---------- 데이터 ----------
-df = pd.read_csv(CSV_IN)
-
-# FD001, FD003만 사용
-df = df[df['dataset'].isin(['FD001', 'FD003'])].copy()
-
-drop_cols = [
-    'unit', 'cycle', 'set1', 'set2', 'set3',
-    's1', 's5', 's6', 's10', 's16', 's18', 's19',
-    'state', 'dataset'
-]
-
-X = MinMaxScaler().fit_transform(df.drop(columns=drop_cols))
-y = df['state'].values
-
-X_tr, X_te, y_tr, y_te = train_test_split(
-    X, y, test_size=0.25, random_state=42, stratify=y
-)
-
-# ---------- 공통 함수 ----------
-def save_report(tag, model, y_true, y_pred):
-    acc = accuracy_score(y_true, y_pred)
-    f1  = f1_score(y_true, y_pred, average='macro')
-    Path(REPORT_DIR / f'{tag}_{model}.txt').write_text(
-        classification_report(y_true, y_pred, digits=3)
-    )
-    return acc, f1
-
-def run_lgb(Xtr, ytr):
-    print("[LightGBM] 학습 시작")
-    m = lgb.LGBMClassifier(
-        n_estimators=1000,
-        learning_rate=0.05,
-        num_leaves=31,
-        objective='multiclass',
-        random_state=42
-    )
-    m.fit(
-        Xtr, ytr,
-        eval_set=[(X_te, y_te)],
-        eval_metric='multi_logloss',
-        callbacks=[
-            lgb.early_stopping(stopping_rounds=20),
-            lgb.log_evaluation(period=50)
-        ]
-    )
-    print("[LightGBM] 학습 완료")
-    return m
-
-def run_xgb(Xtr, ytr):
-    print("[XGBoost] 학습 시작")
-    m = xgb.XGBClassifier(
-        n_estimators=1000,
-        learning_rate=0.05,
-        max_depth=6,
-        subsample=0.9,
-        colsample_bytree=0.9,
-        objective='multi:softprob',
-        num_class=4,
-        eval_metric='mlogloss',
-        use_label_encoder=False,
-        early_stopping_rounds=20,
-        random_state=42
-    )
-    m.fit(
-        Xtr, ytr,
-        eval_set=[(X_te, y_te)],
-        verbose=50
-    )
-    print(f"[XGBoost] 학습 완료 - best_iteration = {m.best_iteration}")
-    return m
+from config.configs import Config, DataType, ModelType, FrameType
+from models.ml_model_trainers import XGBoostTrainer
+from models.factories import TrainerFactory
+from models.data_module import DataFactory
 
 
+def seed_everything(seed):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
 
-def run_tabnet(Xtr, ytr):
-    print("[TabNet] 학습 시작")
-    m = TabNetClassifier(verbose=1, seed=42, device_name='cuda' if torch.cuda.is_available() else 'cpu')
-    m.fit(
-        Xtr, ytr,
-        eval_set=[(X_te, y_te)],
-        max_epochs=EPOCHS_TAB,
-        patience=20,  # 개선 없으면 20 epoch 후 중단
-        eval_metric=['accuracy']
-    )
-    print("[TabNet] 학습 완료")
-    return m
+SAVE_PATH = None
 
 
-def run_ft(Xtr, ytr):
-    print("[FTTransformer] 학습 시작")
-    d = Xtr.shape[1]
-    model = FTTransformer(
-        categories=(),
-        num_continuous=d,
-        dim=64, depth=4, heads=8,
-        dim_out=4, attn_dropout=0.1, ff_dropout=0.1
-    )
+def main(config: Config):
+    """
+    # 계획
+    1. 딥러닝, 머신러닝 비교 모델로 전부 학습해야 함
+    2. 시나리오별로 학습하고 평가도 시나리오별로 진행
+    3. 잘된 시나리오 모델을 최종 선정
+    4. 평가 기준 적분 이용하는 방법 구상
+    5. 교사-학생 모델 조합 각각 진행
+    6. 한번에 학습 하는 구조가 아니라 Config에서 선택할 수 있도록 구성
 
-    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
-    X_t = torch.tensor(Xtr, dtype=torch.float32)
-    y_t = torch.tensor(ytr, dtype=torch.long)
-    X_val = torch.tensor(X_te, dtype=torch.float32)
-    y_val = torch.tensor(y_te, dtype=torch.long)
-    empty_cat = torch.empty((X_t.size(0), 0), dtype=torch.long)
-    empty_val_cat = torch.empty((X_val.size(0), 0), dtype=torch.long)
+    """
+    global SAVE_PATH
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    best_loss = float('inf')
-    patience = 20
-    patience_counter = 0
+    train_valid_result_path = config.train_valid_result_path
+    train_valid_result_path = os.path.join(train_valid_result_path, f"{config.student_data_type.name}_{config.student_model_type.value}_{current_time}")
+    os.makedirs(train_valid_result_path, exist_ok=True)
+    SAVE_PATH = train_valid_result_path
 
-    for epoch in range(EPOCHS_FT):
-        model.train(); opt.zero_grad()
-        out = model(empty_cat, X_t)
-        loss = torch.nn.functional.cross_entropy(out, y_t)
-        loss.backward(); opt.step()
+    train_scen = config.train_scenario
+    reports = []
 
-        model.eval()
-        with torch.no_grad():
-            val_out = model(empty_val_cat, X_val)
-            val_loss = torch.nn.functional.cross_entropy(val_out, y_val)
+    # train by scenario
+    for scen in train_scen:
+        print(f"[INFO] Current Scenario: {scen}")
+        report = train_pipe(scen, config)
+        report["scenario"] = scen
+        print("accuracy: ", report["accuracy"])
+        reports.append(report)
 
-        if (epoch + 1) % 10 == 0 or epoch == 0:
-            print(f"[FTTransformer] Epoch {epoch+1}/{EPOCHS_FT} - TrainLoss: {loss.item():.4f}, ValLoss: {val_loss.item():.4f}")
+    # valid report save
+    report_df = pd.DataFrame(reports)
+    report_df.to_csv(os.path.join(SAVE_PATH, "report.csv"), index=False)
 
-        if val_loss < best_loss:
-            best_loss = val_loss
-            patience_counter = 0
-        else:
-            patience_counter += 1
-            if patience_counter >= patience:
-                print(f"[FTTransformer] Early stopping triggered at epoch {epoch+1}")
-                break
+    # valid
 
-    print("[FTTransformer] 학습 완료")
-    return model
-
-
-def predict_ft(model, Xv):
-    Xv_t = torch.tensor(Xv, dtype=torch.float32)
-    empty_cat = torch.empty((Xv_t.size(0), 0), dtype=torch.long)
-    with torch.no_grad():
-        return model(empty_cat, Xv_t).argmax(1).cpu().numpy()
-
-def run_tabtransformer(Xtr, ytr):
-    print("[TabTransformer] 학습 시작")
-    d = Xtr.shape[1]
-    mean_std = torch.tensor(
-        np.stack([Xtr.mean(axis=0), Xtr.std(axis=0) + 1e-6], axis=1), dtype=torch.float32
-    )
-    model = TabTransformer(
-        categories=(),  # 범주형 없음
-        num_continuous=d,
-        dim=64,
-        dim_out=4,
-        depth=6,
-        heads=8,
-        attn_dropout=0.1,
-        ff_dropout=0.1,
-        mlp_hidden_mults=(4, 2),
-        mlp_act=torch.nn.ReLU(),
-        continuous_mean_std=mean_std
-    )
-
-    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
-    X_t = torch.tensor(Xtr, dtype=torch.float32)
-    y_t = torch.tensor(ytr, dtype=torch.long)
-    X_val = torch.tensor(X_te, dtype=torch.float32)
-    y_val = torch.tensor(y_te, dtype=torch.long)
-    empty_cat = torch.empty((X_t.size(0), 0), dtype=torch.long)
-    empty_val_cat = torch.empty((X_val.size(0), 0), dtype=torch.long)
-
-    best_loss = float('inf')
-    patience = 20
-    patience_counter = 0
-
-    for epoch in range(EPOCHS_FT):
-        model.train(); opt.zero_grad()
-        out = model(empty_cat, X_t)
-        loss = torch.nn.functional.cross_entropy(out, y_t)
-        loss.backward(); opt.step()
-
-        model.eval()
-        with torch.no_grad():
-            val_out = model(empty_val_cat, X_val)
-            val_loss = torch.nn.functional.cross_entropy(val_out, y_val)
-
-        if (epoch + 1) % 10 == 0 or epoch == 0:
-            print(f"[TabTransformer] Epoch {epoch+1}/{EPOCHS_FT} - TrainLoss: {loss.item():.4f}, ValLoss: {val_loss.item():.4f}")
-
-        if val_loss < best_loss:
-            best_loss = val_loss
-            patience_counter = 0
-        else:
-            patience_counter += 1
-            if patience_counter >= patience:
-                print(f"[TabTransformer] Early stopping triggered at epoch {epoch+1}")
-                break
-
-    print("[TabTransformer] 학습 완료")
-    return model
+def data_load(scen: int, data_path: str, data_type: DataType):
+    data_path = os.path.join(data_path, data_type.name, f"iteration_{scen}")
+    if data_type == DataType.RAW:
+        X_train = pd.read_csv((os.path.join(data_path, "X_train.csv"))).values
+        y_train = pd.read_csv((os.path.join(data_path, "y_train.csv"))).values
+        X_valid = pd.read_csv((os.path.join(data_path, "X_valid.csv"))).values
+        y_valid = pd.read_csv((os.path.join(data_path, "y_valid.csv"))).values
+        return [X_train, y_train, X_valid, y_valid]
+    else:
+        X_train = np.load(os.path.join(data_path, "X_train.npy"))
+        X_valid = np.load(os.path.join(data_path, "X_valid.npy"))
+        return [X_train, None, X_valid, None]
 
 
-def predict_tabtransformer(model, Xv):
-    Xv_t = torch.tensor(Xv, dtype=torch.float32)
-    empty_cat = torch.empty((Xv_t.size(0), 0), dtype=torch.long)
-    with torch.no_grad():
-        return model(empty_cat, Xv_t).argmax(1).cpu().numpy()
+def train_pipe(scen: int, config: Config):
+    global SAVE_PATH
+
+    # data laod todo
+    X_train, y_train = DataFactory.load(config.data_path, "train", scen, DataType.RAW)
+    X_valid, y_valid = DataFactory.load(config.data_path, "valid", scen, DataType.RAW)
+
+    if config.student_data_type != DataType.RAW:
+        X_train, _ = DataFactory.load(config.data_path, "train", scen, config.embedding_type)
+        X_valid, _ = DataFactory.load(config.data_path, "valid", scen, config.embedding_type)
+
+    # model trainer
+    trainer = TrainerFactory.build(config.student_model_type, config)
+    trainer.fit(X_train, y_train, X_valid, y_valid, verbose=False)
+    report = trainer.eval(X_valid, y_valid, digits=5, output_dict=True)
+
+    # save path
+    model_save_path = os.path.join(SAVE_PATH, config.train_model_save_path)
+    os.makedirs(model_save_path, exist_ok=True)
+
+    # model save
+    trainer.save_model(model_save_path, f"scen_{scen}")
+
+    return report
 
 
-
-def pipeline(tag, Xtrain, ytrain):
-    print(f"\n========== [{tag.upper()}] 파이프라인 시작 ==========")
-    results = []
-
-    mdl = run_lgb(Xtrain, ytrain)
-    pred = mdl.predict(X_te)
-    acc, f1 = save_report(tag, 'lgb', y_te, pred)
-    results.append((tag, 'LightGBM', acc, f1))
-
-    mdl = run_xgb(Xtrain, ytrain)
-    pred = mdl.predict(X_te)
-    acc, f1 = save_report(tag, 'xgb', y_te, pred)
-    results.append((tag, 'XGBoost', acc, f1))
-
-    mdl = run_tabnet(Xtrain, ytrain)
-    pred = mdl.predict(X_te)
-    acc, f1 = save_report(tag, 'tabnet', y_te, pred)
-    results.append((tag, 'TabNet', acc, f1))
-
-    mdl = run_ft(Xtrain, ytrain)
-    pred = predict_ft(mdl, X_te)
-    acc, f1 = save_report(tag, 'ftt', y_te, pred)
-    results.append((tag, 'FTTransformer', acc, f1))
-
-    mdl = run_tabtransformer(Xtrain, ytrain)
-    pred = predict_tabtransformer(mdl, X_te)
-    acc, f1 = save_report(tag, 'tabtransformer', y_te, pred)
-    results.append((tag, 'TabTransformer', acc, f1))
-
-    print(f"========== [{tag.upper()}] 파이프라인 완료 ==========\n")
-    return results
-
-all_results = []
-all_results += pipeline('no_smote', X_tr, y_tr)
-
-X_aug, y_aug = SMOTE(random_state=42).fit_resample(X_tr, y_tr)
-all_results += pipeline('smote', X_aug, y_aug)
-
-pd.DataFrame(all_results, columns=['setting', 'model', 'accuracy', 'macro_f1']).to_csv(METRIC_CSV, index=False)
-
-print('완료!  metrics →', METRIC_CSV, ',  reports →', REPORT_DIR)
+if __name__ == "__main__":
+    config = Config()
+    seed_everything(config.seed)
+    main(config)
