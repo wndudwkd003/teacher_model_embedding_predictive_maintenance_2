@@ -1,5 +1,6 @@
 import os
 import random
+import json
 from datetime import datetime
 
 import matplotlib.pyplot as plt
@@ -11,6 +12,11 @@ import torch
 from config.configs import Config, DataType, ModelType, RunMode
 from models.data_module import DataFactory
 from models.factories import TrainerFactory
+
+import warnings
+from sklearn.exceptions import UndefinedMetricWarning
+
+warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
 
 
 def seed_everything(seed):
@@ -38,7 +44,7 @@ def main(config: Config):
     # train
     if config.run_mode in [RunMode.TRAIN, RunMode.TRAIN_TEST]:
         print("[INFO] Train Mode")
-        train_save_path = get_save_path(config.train_valid_result_path, config.student_data_type, config.student_data_type, current_time)
+        train_save_path = get_save_path(config.train_valid_result_path, config.student_data_type, config.student_model_type, current_time)
         reports = []
         # train by scenario
         for scen in config.train_scenario:
@@ -57,40 +63,106 @@ def main(config: Config):
     if config.run_mode in [RunMode.TEST, RunMode.TRAIN_TEST]:
         print("[INFO] Test Mode")
         if config.run_mode == RunMode.TRAIN_TEST:
-            test_save_path = train_save_path
+            model_path = train_save_path
+            save_dir = os.path.basename(model_path)
         else:
-            test_save_path = get_save_path(config.test_result_path, config.student_data_type, config.student_data_type, current_time)
+            model_path = config.test_model_save_path
+            save_dir = os.path.basename(model_path)
         model_scens_reports = []
         # test by scenario
         for scen in config.train_scenario:
             print(f"[INFO] Current Scenario: {scen}")
-            reports = test_pipe(scen, config)
+            reports = test_pipe(scen, config, model_path)
+            print_each_scnario(scen, reports)
             model_scens_reports.append(reports)
 
         # test report save
-        svae_test_reports(model_scens_reports, config, test_save_path)
-        print(f"[INFO] Test reports saved to {test_save_path}")
+        save_dir = os.path.join(config.test_result_path, save_dir)
+        os.makedirs(save_dir, exist_ok=True)
+        svae_test_reports(model_scens_reports, config, save_dir)
+        print(f"[INFO] Test reports saved to {save_dir}")
+
+def print_each_scnario(scen: int, reports: list):
+    for i, report in enumerate(reports):
+        print(f"Scene {i} -> ACC: {report['accuracy']} F1: {report['macro avg']['f1-score']} Precision: {report['macro avg']['precision']} Recall: {report['macro avg']['recall']}")
+    print()
+
+def vis_graph(json_path: str, metrics: list = ["accuracy", "f1_score"]):
+    df = pd.read_json(json_path, orient="records", convert_dates=False)
+
+    long_df = df.melt(
+        id_vars=["model_scenario", "scenario"],
+        value_vars=metrics,
+        var_name="metric",
+        value_name="score"
+    )
+
+    palette = sns.color_palette("tab20", long_df["model_scenario"].nunique())
+
+    sns.set(style="whitegrid")
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(
+        data=long_df,
+        x="scenario",
+        y="score",
+        hue="model_scenario",
+        style="metric",
+        markers=True,
+        dashes=False,
+        palette=palette
+    )
+
+    plt.title("accuracy & f1_score by Scenario")
+    plt.xlabel("Scenario")
+    plt.ylabel("Score")
+
+    # 범례를 그림 영역 밖 오른쪽 상단에 배치
+    plt.legend(title="Model Scenario / Metric", bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
+    img_path = json_path.replace(".json", ".jpg")
+    plt.savefig(img_path, dpi=300, bbox_inches="tight")
+    plt.close()
 
 
+def svae_test_reports(reports: list, config: Config, save_dir: str):
+    nested = {}
+    flat_rows = []
 
-def vis_graph(json_path: str, metrics: list = ["accuracy", "f1-score"]):
-    pass
-
-
-def svae_test_reports(reports: list, config: Config, save_path: str):
-    rows = []
     for model_scen, scen_reports in zip(config.train_scenario, reports):
+        m_key = str(model_scen)
+        nested[m_key] = {}
         for rep in scen_reports:
-            rep["model_scenario"] = model_scen
-            rows.append(rep)
-    df = pd.DataFrame(rows)
-    json_path = os.path.join(save_path, "test_report.json")
-    df.to_json(json_path, orient="records", force_ascii=False, indent=2)
+            s_key = str(rep["scenario"])
+            metrics_dict = {
+                "accuracy": rep["accuracy"],
+                "f1_score": rep["macro avg"]["f1-score"],
+                "precision": rep["macro avg"]["precision"],
+                "recall": rep["macro avg"]["recall"]
+            }
+            nested[m_key][s_key] = metrics_dict
 
-    # vis_graph(json_path)
+            # 그래프용 평탄화
+            flat_rows.append({
+                "model_scenario": model_scen,
+                "scenario": rep["scenario"],
+                **metrics_dict
+            })
+
+    os.makedirs(save_dir, exist_ok=True)
+    nested_path = os.path.join(save_dir, "test_report_nested.json")
+    with open(nested_path, "w", encoding="utf-8") as f:
+        json.dump(nested, f, indent=2, ensure_ascii=False)
 
 
-def test_pipe(scen: int, config: Config):
+    flat_df = pd.DataFrame(flat_rows)
+    flat_path = os.path.join(save_dir, "test_report.json")
+    flat_df.to_json(flat_path, orient="records", force_ascii=False, indent=2)
+
+    # 필요 지표만 전달
+    vis_graph(flat_path, metrics=["accuracy", "f1_score"])
+
+
+
+def test_pipe(scen: int, config: Config, model_path: str):
     """
     # 계획
     1. 모델은 시나리오별로 학습되어있음. 14개 각각의 모델을 모든 시나리오로 평가해야 함
@@ -101,7 +173,7 @@ def test_pipe(scen: int, config: Config):
 
     # model load
     trainer = TrainerFactory.build(config.student_model_type, config)
-    trainer.load_model(os.path.join(config.test_model_save_path, "model_save"), f"scen_{scen}")
+    trainer.load_model(os.path.join(model_path, "model_save"), f"scen_{scen}")
 
     # data load
     scen_reports = []

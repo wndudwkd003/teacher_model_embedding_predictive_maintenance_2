@@ -1,27 +1,20 @@
 
 """
 # 언어 모델의 임베딩을 추출하는 코드
-# 학습용
 
 """
 
 import json
 import os
 import random
-from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
-import lightgbm as lgb
 import numpy as np
 import pandas as pd
 import torch
-import xgboost as xgb
-from imblearn.over_sampling import SMOTE
-from pytorch_tabnet.tab_model import TabNetClassifier
-from sklearn.metrics import accuracy_score, classification_report, f1_score
-from sklearn.model_selection import GroupShuffleSplit, train_test_split
+from sklearn.model_selection import GroupShuffleSplit
 from tqdm import tqdm
 
 from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM, T5Tokenizer, T5EncoderModel
@@ -40,15 +33,27 @@ class ModelType(Enum):
     T5 = "t5-base"
     ELECTRA = "google/electra-base-discriminator"
 
+
+class DataVersion(Enum):
+    V1 = "stack"
+    V2 = "no_stack"
+
+
+class PhaseType(Enum):
+    TRAIN = "train"
+    MASKING_TEST = "masking_test"
+
+
 @dataclass
 class Config:
     seed: int = 42
     batch_size: Dict[str, int] = field(default_factory=lambda: {"basic": 4, "smote": 2})
     device: str = "cuda"
-    models: List[ModelType] = field(default_factory=lambda: [ModelType.BERT, ModelType.GPT2])# , ModelType.GEMMA3, ModelType.T5, ModelType.ELECTRA])
+    models: List[ModelType] = field(default_factory=lambda: [ModelType.GEMMA3, ModelType.T5, ModelType.ELECTRA])
     dataset_select: List[str] = field(default_factory=lambda: ["FD001", "FD003"])
     dataset_path: str = "engine_knee_plots_multi/all_engines_labeled.csv"
-    type: str = "masking_test" # train or masking_test
+    type: PhaseType = PhaseType.TRAIN
+    masking_version: DataVersion = DataVersion.V1
     feature_importance_path: str = "outputs/feature_importance/nasa_dataset/feature_importance.csv"
     drop_cols: List[str] = field(default_factory=lambda: ['unit','cycle','set1','set2','set3', 's1','s5','s6','s10','s16','s18','s19','state','dataset'])
     cols_rename_map: Dict[str, str] = field(default_factory=lambda: {
@@ -81,7 +86,7 @@ class Config:
             "state": "label",
             "dataset": "dataset_id"
         })
-    output_dir: str = f"dataset_output_for_{type}"
+    output_dir: str = f"dataset_output_for_{type.value}_{masking_version.value}"
 
 def seed_everything(seed):
     np.random.seed(seed)
@@ -128,7 +133,7 @@ def main(config: Config):
 
 
     # 학습용으로 임베딩 추출 -> 시나리오 0부터 센서 개수(16-1)까지 랜덤으로 결측 마스킹
-    if config.type == "train":
+    if config.type == PhaseType.TRAIN:
         """
         # 계획
         1. LM으로 임베딩을 추출할건데, SMOTE 증강 유무에 따라서 동시에 저장
@@ -184,15 +189,16 @@ def apply_masking_scenario(phase: str, X_df: pd.DataFrame, train_perm_idx: np.nd
         raw_dir = get_scen_raw_path(scen, "RAW")
         os.makedirs(raw_dir, exist_ok=True)
 
-        if scen > 0:
-            before_dir = get_scen_raw_path(scen-1, "RAW")
-            before_masked_X = pd.read_csv(os.path.join(before_dir, f"X_{phase}.csv"))
-            masked_raw_X_df = pd.DataFrame(pd.concat([before_masked_X, masked_raw_X_df], axis=0), columns=X_df.columns)
+        if config.masking_version == DataVersion.V1:
+            if scen > 0:
+                before_dir = get_scen_raw_path(scen-1, "RAW")
+                before_masked_X = pd.read_csv(os.path.join(before_dir, f"X_{phase}.csv"))
+                masked_raw_X_df = pd.DataFrame(pd.concat([before_masked_X, masked_raw_X_df], axis=0), columns=X_df.columns)
+
+            y_df = pd.DataFrame(pd.concat([y_df]*(scen+1), axis=0), columns=["state"])
 
         masked_raw_X_df.to_csv(os.path.join(raw_dir, f"X_{phase}.csv"), index=False)
-
-        raw_y_df = pd.DataFrame(pd.concat([y_df]*(scen+1), axis=0), columns=["state"])
-        raw_y_df.to_csv(os.path.join(raw_dir, f"y_{phase}.csv"), index=False)
+        y_df.to_csv(os.path.join(raw_dir, f"y_{phase}.csv"), index=False)
 
         # json 데이터 변환
         json_strings = [json.dumps(row) for row in current_scen_X_df.to_dict(orient="records")]
@@ -203,10 +209,11 @@ def apply_masking_scenario(phase: str, X_df: pd.DataFrame, train_perm_idx: np.nd
             raw_dir = get_scen_raw_path(scen, model.name)
             embeddings = extract_lm_embedding(json_strings, model, config.device)
 
-            if scen > 0:
-                before_dir = get_scen_raw_path(scen-1, model.name)
-                before_masked_X = np.load(os.path.join(before_dir, f"X_{phase}.npy"))
-                embeddings = np.concatenate([before_masked_X, embeddings], axis=0)
+            if config.masking_version == DataVersion.V1:
+                if scen > 0:
+                    before_dir = get_scen_raw_path(scen-1, model.name)
+                    before_masked_X = np.load(os.path.join(before_dir, f"X_{phase}.npy"))
+                    embeddings = np.concatenate([before_masked_X, embeddings], axis=0)
 
             embedding_dir = os.path.join(config.output_dir, model.name, f"iteration_{scen}")
             os.makedirs(embedding_dir, exist_ok=True)

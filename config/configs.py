@@ -32,10 +32,14 @@ class RunMode(Enum):
     TRAIN_TEST = "train_test"
 
 
+class StackMode(Enum):
+    STACK = "stack"
+    NO_STACK = "no_stack"
+
 @dataclass
 class Config:
     # 학습 또는 평가 모드 설정하는 변수
-    run_mode: RunMode = RunMode.TRAIN_TEST
+    run_mode: RunMode = RunMode.TEST
 
     # 학습 하이퍼파라미터 변수
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
@@ -53,13 +57,14 @@ class Config:
     train_scenario: List[int] = field(default_factory=lambda: list(range(14)))
 
     # train path
+    train_data_path: str = "dataset_output_for_train_stack"
     train_valid_result_path: str = "outputs/train_result"
-    train_data_path: str = "dataset_output_for_train"
 
     # test path
-    test_data_path: str = "dataset_output_for_masking_test"
-    test_result_path: str = "outputs/test_results"
-    test_model_save_path: str = "output_result/RAW_RAW_XGBoost_20250516_144612"
+    stack_type: StackMode = StackMode.NO_STACK
+    test_data_path: str = f"dataset_output_for_masking_test_{stack_type.value}"
+    test_result_path: str = f"outputs/test_results_{stack_type.value}"
+    test_model_save_path: str = "outputs/train_result/RAW_RAW_XGBoost_20250517_183908"
 
 
     # 학습 방법 설정
