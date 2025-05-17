@@ -39,5 +39,5 @@ class XGBoostTrainer(BaseTrainer):
     def save_model(self, path, name):
         self.model.save_model(os.path.join(path, f"{name}.json"))
 
-    def load_model(self, path):
-        self.model.load_model(path)
+    def load_model(self, path, name):
+        self.model.load_model(os.path.join(path, f"{name}.json"))

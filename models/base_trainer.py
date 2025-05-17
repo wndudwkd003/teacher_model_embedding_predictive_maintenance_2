@@ -32,6 +32,6 @@ class BaseTrainer(ABC):
         pass
 
     @abstractmethod
-    def load_model(self, path: str) -> None:
+    def load_model(self, path: str, name) -> None:
         pass
 

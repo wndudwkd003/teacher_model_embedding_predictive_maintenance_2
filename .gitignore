@@ -13,3 +13,5 @@ dataset_output_for_train
 outputs
 reports
 plots
+
+dataset_output_for_masking_test

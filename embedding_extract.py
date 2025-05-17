@@ -47,8 +47,9 @@ class Config:
     device: str = "cuda"
     models: List[ModelType] = field(default_factory=lambda: [ModelType.BERT, ModelType.GPT2])# , ModelType.GEMMA3, ModelType.T5, ModelType.ELECTRA])
     dataset_select: List[str] = field(default_factory=lambda: ["FD001", "FD003"])
-    dataset_path: str = "/home/juyoung-lab/ws/dev_ws/pi2/engine_knee_plots_multi/all_engines_labeled.csv"
-    type: str = "train" # train or masking_test
+    dataset_path: str = "engine_knee_plots_multi/all_engines_labeled.csv"
+    type: str = "masking_test" # train or masking_test
+    feature_importance_path: str = "outputs/feature_importance/nasa_dataset/feature_importance.csv"
     drop_cols: List[str] = field(default_factory=lambda: ['unit','cycle','set1','set2','set3', 's1','s5','s6','s10','s16','s18','s19','state','dataset'])
     cols_rename_map: Dict[str, str] = field(default_factory=lambda: {
             "unit": "engine_id",
@@ -80,7 +81,7 @@ class Config:
             "state": "label",
             "dataset": "dataset_id"
         })
-    output_dir: str = "dataset_output_for_train"
+    output_dir: str = f"dataset_output_for_{type}"
 
 def seed_everything(seed):
     np.random.seed(seed)
@@ -105,16 +106,6 @@ def split_dataset(df: pd.DataFrame, dataset_select: List[str], seed: int) -> Tup
     test_df = selected_df.iloc[test_idx].reset_index(drop=True)
     return train_df, test_df
 
-# random split
-# def split_dataset(df: pd.DataFrame, dataset_select: List[str], seed: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
-#     selected_df = df[df["dataset"].isin(dataset_select)].copy()
-#     train_df, test_df = train_test_split(selected_df, test_size=0.2, random_state=seed, stratify=selected_df["state"])
-#     return train_df, test_df
-
-
-
-
-
 
 def main(config: Config):
     # 언어 모델 임베딩 추출
@@ -134,6 +125,7 @@ def main(config: Config):
 
     X_train.rename(columns=config.cols_rename_map, inplace=True)
     X_test.rename(columns=config.cols_rename_map, inplace=True)
+
 
     # 학습용으로 임베딩 추출 -> 시나리오 0부터 센서 개수(16-1)까지 랜덤으로 결측 마스킹
     if config.type == "train":
@@ -156,33 +148,20 @@ def main(config: Config):
 
         """
 
-
         train_perm_idx = generate_random_permutation(config.seed, X_train)
         apply_masking_scenario("train", X_train, train_perm_idx, y_train, config)
 
         test_perm_idx = generate_random_permutation(config.seed, X_test)
         apply_masking_scenario("valid", X_test, test_perm_idx, y_test, config)
 
-        # original_counts = Counter(y_train)
-        # printi(f"Original counts: {original_counts}")
-        # total_target = int(len(y_train) * 5)
-        # scaling = total_target / len(y_train)
-        # sampling_strategy = {k: int(v * scaling) for k, v in original_counts.items()}
-
-        # smote = SMOTE(sampling_strategy=sampling_strategy, random_state=config.seed)
-        # X_train, y_train = smote.fit_resample(X_train, y_train)
-        # printi(f"Resampled counts: {Counter(y_train)}")
-
-        # printi(f"Train: {X_train.shape}, {y_train.shape} | Test: {X_test.shape}, {y_test.shape}")
-
-
-
-
 
     # 테스트용으로 임베딩 추출 -> lgbm feature importance로 시나리오 순서대로 결측 마스킹
+    # 테스트용은 valid 데이터만 추출
     else:
-        pass
+        test_perm_idx = generate_feature_importance_permutation(X_test, config)
+        apply_masking_scenario("valid", X_test, test_perm_idx, y_test, config)
 
+    printi(f"End of embedding extraction process -> {config.output_dir}")
 
 
 # np.concatenate([raw_masked_results[scen-1], masked_X], axis=0) if scen > 0 else masked_X
@@ -194,6 +173,7 @@ def apply_masking_scenario(phase: str, X_df: pd.DataFrame, train_perm_idx: np.nd
             return os.path.join(config.output_dir, phase, f"iteration_{scen}")
 
     for scen in range(len(X_df.columns)):
+        printi(f"Current Scenario: {scen}")
         masked_X = X_df.to_numpy().copy()
         masked_idx = train_perm_idx[:, :scen]
         masked_X[np.arange(row_count)[:, None], masked_idx] = -1
@@ -289,46 +269,25 @@ def extract_lm_embedding(json_strings: List[str], model_type: ModelType, device:
 
             embeddings.append(batch_emb)
 
-    # with torch.no_grad():
-    #     model.to(device).eval()
-
-    #     for json_str in tqdm(json_strings, desc=f"Extracting {model_type.name}"):
-    #         inputs = tokenizer(json_str, return_tensors="pt", truncation=True, max_length=300, padding="max_length").to(device)
-
-    #         outputs = model(**inputs, output_hidden_states=True, return_dict=True)
-
-    #         final_hidden_state = outputs.hidden_states[-1] if outputs.hidden_states else outputs.last_hidden_state
-
-    #         mask = inputs["attention_mask"].unsqueeze(-1)                   # mask
-    #         masked_hiedden = final_hidden_state * mask                      # only
-    #         lengths = mask.sum(dim=1)
-    #         embedding = masked_hiedden.sum(dim=1) / lengths                 # avg pooling
-    #         embedding = embedding.squeeze(0).cpu().numpy()
-
-    #         embeddings.append(embedding)
-
     embeddings = np.concatenate(embeddings, axis=0)
     return embeddings   # np.ndarray
 
 
-
-
-
-
-def generate_random_permutation(seed: int, X_train: pd.DataFrame) -> np.ndarray:
+def generate_random_permutation(seed: int, X: pd.DataFrame) -> np.ndarray:
     rng = np.random.default_rng(seed=seed)
-    rand_mat = rng.random(tuple(X_train.shape))
+    rand_mat = rng.random(tuple(X.shape))
     perm = np.argsort(rand_mat, axis=1)
     return perm
 
 
-
-
+def generate_feature_importance_permutation(X: pd.DataFrame, config: Config) -> np.ndarray:
+    importance = pd.read_csv(config.feature_importance_path)
+    idx = X.columns.get_indexer(importance["feature"])
+    perm = np.tile(idx, (len(X), 1))
+    return perm
 
 
 if __name__ == "__main__":
     config = Config()
     seed_everything(config.seed)
     main(config)
-
-

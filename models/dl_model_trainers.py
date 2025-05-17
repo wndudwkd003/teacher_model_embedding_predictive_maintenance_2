@@ -55,7 +55,7 @@ class TabNetTrainer(BaseTrainer):
     def save_model(self, path, name):
         self.model.save_model(os.path.join(path, name))
 
-    def load_model(self, path):
+    def load_model(self, path, name=None):
         self.model.load_model(path)
 
 
@@ -129,8 +129,8 @@ class TorchTrainerBase(BaseTrainer):
     def save_model(self, path, name):
         torch.save(self.model.state_dict(), os.path.join(path, f"{name}.pth"))
 
-    def load_model(self, path):
-        self.model.load_state_dict(torch.load(path, map_location=self.cfg.device, weights_only=True))
+    def load_model(self, path, name):
+        self.model.load_state_dict(torch.load(os.path.join(path, f"{name}.pth"), map_location=self.cfg.device, weights_only=True))
 
 
 
