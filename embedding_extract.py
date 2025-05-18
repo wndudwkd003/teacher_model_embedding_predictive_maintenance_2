@@ -35,8 +35,8 @@ class ModelType(Enum):
 
 
 class DataVersion(Enum):
-    V1 = "stack"
-    V2 = "no_stack"
+    STACK = "stack"
+    NO_STACK = "no_stack"
 
 
 class PhaseType(Enum):
@@ -49,11 +49,11 @@ class Config:
     seed: int = 42
     batch_size: Dict[str, int] = field(default_factory=lambda: {"basic": 4, "smote": 2})
     device: str = "cuda"
-    models: List[ModelType] = field(default_factory=lambda: [ModelType.GEMMA3, ModelType.T5, ModelType.ELECTRA])
+    models: List[ModelType] = field(default_factory=lambda: [ModelType.BERT])
     dataset_select: List[str] = field(default_factory=lambda: ["FD001", "FD003"])
     dataset_path: str = "engine_knee_plots_multi/all_engines_labeled.csv"
     type: PhaseType = PhaseType.TRAIN
-    masking_version: DataVersion = DataVersion.V1
+    data_stack_type: DataVersion = DataVersion.NO_STACK
     feature_importance_path: str = "outputs/feature_importance/nasa_dataset/feature_importance.csv"
     drop_cols: List[str] = field(default_factory=lambda: ['unit','cycle','set1','set2','set3', 's1','s5','s6','s10','s16','s18','s19','state','dataset'])
     cols_rename_map: Dict[str, str] = field(default_factory=lambda: {
@@ -86,7 +86,7 @@ class Config:
             "state": "label",
             "dataset": "dataset_id"
         })
-    output_dir: str = f"dataset_output_for_{type.value}_{masking_version.value}"
+    output_dir: str = f"dataset_output_for_{type.value}_{data_stack_type.value}"
 
 def seed_everything(seed):
     np.random.seed(seed)
@@ -189,7 +189,7 @@ def apply_masking_scenario(phase: str, X_df: pd.DataFrame, train_perm_idx: np.nd
         raw_dir = get_scen_raw_path(scen, "RAW")
         os.makedirs(raw_dir, exist_ok=True)
 
-        if config.masking_version == DataVersion.V1:
+        if config.data_stack_type == DataVersion.STACK:
             if scen > 0:
                 before_dir = get_scen_raw_path(scen-1, "RAW")
                 before_masked_X = pd.read_csv(os.path.join(before_dir, f"X_{phase}.csv"))
@@ -209,7 +209,7 @@ def apply_masking_scenario(phase: str, X_df: pd.DataFrame, train_perm_idx: np.nd
             raw_dir = get_scen_raw_path(scen, model.name)
             embeddings = extract_lm_embedding(json_strings, model, config.device)
 
-            if config.masking_version == DataVersion.V1:
+            if config.data_stack_type == DataVersion.STACK:
                 if scen > 0:
                     before_dir = get_scen_raw_path(scen-1, model.name)
                     before_masked_X = np.load(os.path.join(before_dir, f"X_{phase}.npy"))

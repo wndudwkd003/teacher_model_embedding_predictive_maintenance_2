@@ -1,6 +1,6 @@
 import os, numpy as np, pandas as pd, torch
 from typing import Tuple, Dict, Any
-from config.configs import DataType, FrameType
+from config.configs import DataType, FrameType, StackType
 from abc import ABC, abstractmethod
 
 class BaseLoader(ABC):
@@ -28,10 +28,26 @@ class DataFactory:
     }
 
     @classmethod
-    def load(cls, root: str, name: str, scen: int, dtype: DataType):
-        folder = os.path.join(root, dtype.name, f"iteration_{scen}")
-
+    def load(cls, root: str, name: str, scen: int, dtype: DataType, stack_type: StackType = StackType.STACK):
+        X = []
+        y = []
         loader_cls = cls._registry[dtype]
         loader = loader_cls()
-        return loader.load(folder, name)
+
+        if stack_type == StackType.STACK:
+            for i in range(scen+1):
+                folder = os.path.join(root, dtype.name, f"iteration_{i}")
+                X_i, y_i = loader.load(folder, name)
+                X.append(X_i)
+                y.append(y_i)
+        else:
+            folder = os.path.join(root, dtype.name, f"iteration_{scen}")
+            X_i, y_i = loader.load(folder, name)
+            X.append(X_i)
+            y.append(y_i)
+
+        X = np.concatenate(X, axis=0)
+        y = np.concatenate(y, axis=0) if y[0] is not None else None
+
+        return X, y
 

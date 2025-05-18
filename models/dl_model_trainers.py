@@ -8,7 +8,7 @@ import xgboost as xgb
 from pytorch_tabnet.tab_model import TabNetClassifier
 from sklearn.metrics import classification_report
 
-from config.configs import Config
+from config.configs import Config, InputType
 from models.base_trainer import BaseTrainer
 from models.models import MLP, ResNetMLP
 
@@ -56,7 +56,7 @@ class TabNetTrainer(BaseTrainer):
         self.model.save_model(os.path.join(path, name))
 
     def load_model(self, path, name=None):
-        self.model.load_model(path)
+        self.model.load_model(os.path.join(path, f"{name}.zip"))
 
 
 def load_dl_utils(model_params, cfg: Config):
@@ -134,14 +134,24 @@ class TorchTrainerBase(BaseTrainer):
 
 
 
+def get_input_dim(cfg: Config):
+    if cfg.input_dim_type == InputType.RAW:
+        return cfg.raw_input_dim
+    elif cfg.input_dim_type == InputType.EMBEDDING:
+        return cfg.embedding_input_dim
+    elif cfg.input_dim_type == InputType.MIX:
+        return cfg.mix_input_dim
+
+
+
 class MLPTrainer(TorchTrainerBase):
     def build_model(self):
-        return MLP(input_dim=self.cfg.mlp_input_dim, hidden_dims=[256] * 2, output_dim=4, dropout=self.cfg.dropout, use_batchnorm=True)
+        return MLP(input_dim=get_input_dim(self.cfg), hidden_dims=[256] * 2, output_dim=4, dropout=self.cfg.dropout, use_batchnorm=True)
 
 
 class ResNetTrainer(TorchTrainerBase):
     def build_model(self):
-        return ResNetMLP(input_dim=self.cfg.mlp_input_dim, hidden_dim=256, num_blocks=2, output_dim=4, dropout=self.cfg.dropout, use_batchnorm=True)
+        return ResNetMLP(input_dim=get_input_dim(self.cfg), hidden_dim=256, num_blocks=2, output_dim=4, dropout=self.cfg.dropout, use_batchnorm=True)
 
 
 

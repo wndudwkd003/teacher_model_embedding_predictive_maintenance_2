@@ -9,7 +9,7 @@ import pandas as pd
 import seaborn as sns
 import torch
 
-from config.configs import Config, DataType, ModelType, RunMode
+from config.configs import Config, DataType, ModelType, RunType, StackType, FrameType
 from models.data_module import DataFactory
 from models.factories import TrainerFactory
 
@@ -42,9 +42,9 @@ def main(config: Config):
     """
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     # train
-    if config.run_mode in [RunMode.TRAIN, RunMode.TRAIN_TEST]:
+    if config.run_mode in [RunType.TRAIN, RunType.TRAIN_TEST]:
         print("[INFO] Train Mode")
-        train_save_path = get_save_path(config.train_valid_result_path, config.student_data_type, config.student_model_type, current_time)
+        train_save_path = get_save_path(config.train_valid_result_path, config.student_frame_type, config.student_model_type, current_time)
         reports = []
         # train by scenario
         for scen in config.train_scenario:
@@ -60,9 +60,9 @@ def main(config: Config):
         print(f"[INFO] Train reports saved to {train_save_path}")
 
     # test
-    if config.run_mode in [RunMode.TEST, RunMode.TRAIN_TEST]:
+    if config.run_mode in [RunType.TEST, RunType.TRAIN_TEST]:
         print("[INFO] Test Mode")
-        if config.run_mode == RunMode.TRAIN_TEST:
+        if config.run_mode == RunType.TRAIN_TEST:
             model_path = train_save_path
             save_dir = os.path.basename(model_path)
         else:
@@ -178,9 +178,15 @@ def test_pipe(scen: int, config: Config, model_path: str):
     # data load
     scen_reports = []
     for i in config.train_scenario:
-        X_valid, y_valid = DataFactory.load(config.test_data_path, "valid", i, DataType.RAW)
-        if config.student_data_type != DataType.RAW:
-            X_valid, _ = DataFactory.load(config.test_data_path, "valid", i, config.embedding_type)
+        X_valid, y_valid = DataFactory.load(config.test_data_path, "valid", i, DataType.RAW, StackType.NO_STACK)
+        if config.student_frame_type != FrameType.RAW_RAW:
+            if config.student_frame_type == FrameType.EMBEDDING_MIX_RAW:
+                X_valid_raw = X_valid.copy()
+
+            X_valid, _ = DataFactory.load(config.test_data_path, "valid", i, config.embedding_type, StackType.NO_STACK)
+
+            if config.student_frame_type == FrameType.EMBEDDING_MIX_RAW:
+                X_valid = np.concatenate([X_valid_raw, X_valid], axis=1)
 
         report = trainer.eval(X_valid, y_valid, digits=5, output_dict=True)
         report["scenario"] = i
@@ -191,15 +197,25 @@ def test_pipe(scen: int, config: Config, model_path: str):
 
 def train_pipe(scen: int, config: Config, save_path: str):
     # data laod todo
-    X_train, y_train = DataFactory.load(config.train_data_path, "train", scen, DataType.RAW)
-    X_valid, y_valid = DataFactory.load(config.train_data_path, "valid", scen, DataType.RAW)
+    X_train, y_train = DataFactory.load(config.train_data_path, "train", scen, DataType.RAW, StackType.STACK)
+    X_valid, y_valid = DataFactory.load(config.train_data_path, "valid", scen, DataType.RAW, StackType.STACK)
 
-    if config.student_data_type != DataType.RAW:
-        X_train, _ = DataFactory.load(config.train_data_path, "train", scen, config.embedding_type)
-        X_valid, _ = DataFactory.load(config.train_data_path, "valid", scen, config.embedding_type)
+    if config.student_frame_type != FrameType.RAW_RAW:
+        if config.student_frame_type == FrameType.EMBEDDING_MIX_RAW:
+            X_train_raw = X_train.copy()
+            X_valid_raw = X_valid.copy()
+
+        X_train, _ = DataFactory.load(config.train_data_path, "train", scen, config.embedding_type, StackType.STACK)
+        X_valid, _ = DataFactory.load(config.train_data_path, "valid", scen, config.embedding_type, StackType.STACK)
+
+        if config.student_frame_type == FrameType.EMBEDDING_MIX_RAW:
+            X_train = np.concatenate([X_train_raw, X_train], axis=1)
+            X_valid = np.concatenate([X_valid_raw, X_valid], axis=1)
 
     # model trainer
     trainer = TrainerFactory.build(config.student_model_type, config)
+    print(f"[INFO] Current train shape: {X_train.shape}, {y_train.shape}")
+    print(f"[INFO] Current valid shape: {X_valid.shape}, {y_valid.shape}")
     trainer.fit(X_train, y_train, X_valid, y_valid, verbose=False)
     report = trainer.eval(X_valid, y_valid, digits=5, output_dict=True)
 
