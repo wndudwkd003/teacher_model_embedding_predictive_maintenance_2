@@ -49,7 +49,7 @@ class Config:
     seed: int = 42
     batch_size: Dict[str, int] = field(default_factory=lambda: {"basic": 4, "smote": 2})
     device: str = "cuda"
-    models: List[ModelType] = field(default_factory=lambda: [ModelType.BERT])
+    models: List[ModelType] = field(default_factory=lambda: [ModelType.GEMMA3])
     dataset_select: List[str] = field(default_factory=lambda: ["FD001", "FD003"])
     dataset_path: str = "engine_knee_plots_multi/all_engines_labeled.csv"
     type: PhaseType = PhaseType.TRAIN

@@ -14,17 +14,34 @@ class FrameType(Enum):
 
 
 class ModelType(Enum):
-    XGBOOST = "XGBoost"
-    LIGHTGBM = "LightGBM"
     MLP = "MLP"
     RESNET_MLP = "ResidualMLP"
+
+    AE = "AutoEncoder"
+    VAE = "VAE"
+    AE_LATENT = "AautoEncoder_Latent"
+    VAE_LATENT = "VAE_Latent"
+    GNN = "GNN"
+
     TABNET = "TabNet"
+    TAB_TRANSFORMER = "TabTransformer"
+    FTT = "FTTransformer"
+
+    XGBOOST = "XGBoost"
+    LIGHTGBM = "LightGBM"
+    SVM = "SVM"
+    RF = "RandomForest"
+    GBT = "GradientBoosting"
+    LR = "LogisticRegression"
 
 
 class DataType(Enum):
     RAW = "RAW"
     GPT2 = "GPT2"
     BERT = "BERT"
+    GEMMA = "GEMMA"
+    ELECTRA = "ELECTRA"
+    T5 = "T5"
 
 
 class RunType(Enum):

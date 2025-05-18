@@ -8,7 +8,7 @@ import xgboost as xgb
 from pytorch_tabnet.tab_model import TabNetClassifier
 from sklearn.metrics import classification_report
 
-from config.configs import Config, InputType
+from config.configs import Config, FrameType
 from models.base_trainer import BaseTrainer
 from models.models import MLP, ResNetMLP
 
@@ -66,9 +66,22 @@ def load_dl_utils(model_params, cfg: Config):
         return loss_fun, optim, scheduler
 
 
+
+def get_input_dim(cfg: Config):
+    if cfg.student_frame_type in [FrameType.RAW_RAW, FrameType.RAW_LOGITS]:
+        return cfg.raw_input_dim
+    elif cfg.student_frame_type in [FrameType.EMBEDDING_RAW, FrameType.EMBEDDING_LOGITS]:
+        return cfg.embedding_input_dim
+    elif cfg.student_frame_type == FrameType.EMBEDDING_MIX_RAW:
+        return cfg.mix_input_dim
+    else:
+        raise ValueError(f"Unknown input dimension type: {cfg.student_frame_type}. Please check the configuration.")
+
+
 class TorchTrainerBase(BaseTrainer):
     def __init__(self, cfg: Config):
         super().__init__(cfg)
+        self.input_dim = get_input_dim(cfg)
         self.model = self.build_model().to(cfg.device)
         self.loss_fun, self.optim, self.scheduler = load_dl_utils(self.model.parameters(), self.cfg)
 
@@ -134,24 +147,16 @@ class TorchTrainerBase(BaseTrainer):
 
 
 
-def get_input_dim(cfg: Config):
-    if cfg.input_dim_type == InputType.RAW:
-        return cfg.raw_input_dim
-    elif cfg.input_dim_type == InputType.EMBEDDING:
-        return cfg.embedding_input_dim
-    elif cfg.input_dim_type == InputType.MIX:
-        return cfg.mix_input_dim
-
 
 
 class MLPTrainer(TorchTrainerBase):
     def build_model(self):
-        return MLP(input_dim=get_input_dim(self.cfg), hidden_dims=[256] * 2, output_dim=4, dropout=self.cfg.dropout, use_batchnorm=True)
+        return MLP(input_dim=self.input_dim, hidden_dims=[256] * 2, output_dim=4, dropout=self.cfg.dropout, use_batchnorm=True)
 
 
 class ResNetTrainer(TorchTrainerBase):
     def build_model(self):
-        return ResNetMLP(input_dim=get_input_dim(self.cfg), hidden_dim=256, num_blocks=2, output_dim=4, dropout=self.cfg.dropout, use_batchnorm=True)
+        return ResNetMLP(input_dim=self.input_dim, hidden_dim=256, num_blocks=2, output_dim=4, dropout=self.cfg.dropout, use_batchnorm=True)
 
 
 
