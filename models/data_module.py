@@ -25,6 +25,9 @@ class DataFactory:
         DataType.RAW: CSVLoader,   # ← 클래스 그대로
         DataType.BERT: NPYLoader,
         DataType.GPT2: NPYLoader,
+        DataType.GEMMA3: NPYLoader,
+        DataType.ELECTRA: NPYLoader,
+        DataType.T5: NPYLoader,
     }
 
     @classmethod

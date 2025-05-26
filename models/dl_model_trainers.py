@@ -10,7 +10,7 @@ from sklearn.metrics import classification_report
 
 from config.configs import Config, FrameType
 from models.base_trainer import BaseTrainer
-from models.models import MLP, ResNetMLP
+from models.models import MLP, ResNetMLP, HybridModel
 
 
 class TabNetTrainer(BaseTrainer):
@@ -157,6 +157,16 @@ class MLPTrainer(TorchTrainerBase):
 class ResNetTrainer(TorchTrainerBase):
     def build_model(self):
         return ResNetMLP(input_dim=self.input_dim, hidden_dim=256, num_blocks=2, output_dim=4, dropout=self.cfg.dropout, use_batchnorm=True)
+
+
+class HybridTrainer(TorchTrainerBase):
+    def build_model(self):
+        return HybridModel(
+            input_dim=self.input_dim,
+            output_dim=4,
+            dropout=self.cfg.dropout
+        )
+
 
 
 

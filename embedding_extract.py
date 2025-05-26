@@ -52,7 +52,7 @@ class Config:
     models: List[ModelType] = field(default_factory=lambda: [ModelType.GEMMA3])
     dataset_select: List[str] = field(default_factory=lambda: ["FD001", "FD003"])
     dataset_path: str = "engine_knee_plots_multi/all_engines_labeled.csv"
-    type: PhaseType = PhaseType.TRAIN
+    type: PhaseType = PhaseType.MASKING_TEST
     data_stack_type: DataVersion = DataVersion.NO_STACK
     feature_importance_path: str = "outputs/feature_importance/nasa_dataset/feature_importance.csv"
     drop_cols: List[str] = field(default_factory=lambda: ['unit','cycle','set1','set2','set3', 's1','s5','s6','s10','s16','s18','s19','state','dataset'])

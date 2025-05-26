@@ -16,6 +16,8 @@ from models.factories import TrainerFactory
 import warnings
 from sklearn.exceptions import UndefinedMetricWarning
 
+from argparse import ArgumentParser
+
 warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
 
 
@@ -44,7 +46,7 @@ def main(config: Config):
     # train
     if config.run_mode in [RunType.TRAIN, RunType.TRAIN_TEST]:
         print("[INFO] Train Mode")
-        train_save_path = get_save_path(config.train_valid_result_path, config.student_frame_type, config.student_model_type, current_time)
+        train_save_path = get_save_path(config.train_valid_result_path, config.student_frame_type, config.student_model_type, config.embedding_type, current_time)
         reports = []
         # train by scenario
         for scen in config.train_scenario:
@@ -228,12 +230,42 @@ def train_pipe(scen: int, config: Config, save_path: str):
 
     return report
 
-def get_save_path(result_path: str, data_type: DataType, model_type: ModelType, current_time: str):
-    save_path = os.path.join(result_path, f"{data_type.name}_{model_type.value}_{current_time}")
+def get_save_path(result_path: str, frame_type: FrameType, model_type: ModelType, embedding_type: DataType, current_time: str):
+    save_path = os.path.join(result_path, f"{frame_type.name}_{model_type.value}_{embedding_type.name}_{current_time}")
     os.makedirs(save_path, exist_ok=True)
     return save_path
 
 if __name__ == "__main__":
     config = Config()
+
+    parser = ArgumentParser()
+    parser.add_argument(
+        "--student_frame_type",
+        type=str,
+        choices=[e.value for e in FrameType],
+        default=config.student_frame_type.value,
+        help="학생 모델이 사용할 FrameType"
+    )
+    parser.add_argument(
+        "--student_model_type",
+        type=str,
+        choices=[e.value for e in ModelType],
+        default=config.student_model_type.value,
+        help="학생 모델이 사용할 ModelType"
+    )
+    parser.add_argument(
+        "--embedding_type",
+        type=str,
+        choices=[e.value for e in DataType],
+        default=config.embedding_type.value,
+        help="임베딩 DataType"
+    )
+
+    args = parser.parse_args()
+    config.student_frame_type = FrameType(args.student_frame_type)
+    config.student_model_type = ModelType(args.student_model_type)
+    config.embedding_type = DataType(args.embedding_type)
+
     seed_everything(config.seed)
+    print(config)
     main(config)

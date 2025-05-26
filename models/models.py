@@ -87,7 +87,7 @@ class ResNetMLP(nn.Module):
         x = self.stem(x)
         x = self.res_blocks(x)
         return self.head(x)
-    
+
 
 # -------------------------------------------------
 # 1. CNN + LSTM
@@ -217,7 +217,7 @@ class CNNMLP(nn.Module):
         x = self.SiLU(x)
         x = self.pool(x)                         # (B, C, 1)
         return self.head(x)
-    
+
 
 class AEClassifier(nn.Module):
     """AutoEncoder + 4‑class classifier"""
@@ -398,3 +398,40 @@ class TransformerMLP(nn.Module):
             pooled = h.mean(dim=1)                              # Mean‑pool
 
         return self.mlp_head(pooled)
+
+
+class HybridModel(nn.Module):
+    def __init__(self, input_dim: int, output_dim: int, dropout: float = 0.2):
+        super().__init__()
+        # 1) 동일 차원 MLP
+        self.pre_mlp = nn.Sequential(
+            nn.Linear(input_dim, input_dim)
+        )
+        # 2) Transformer Encoder (batch_first=True → [B, S, E])
+        enc_layer = nn.TransformerEncoderLayer(
+            d_model=input_dim, nhead=8, dim_feedforward=input_dim * 4,
+            dropout=dropout, activation='silu', batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(enc_layer, num_layers=2)
+        # 3) 1-D CNN: (B, 1, S) → (B, 256, S)
+        self.conv = nn.Sequential(
+            nn.Conv1d(1, 128, kernel_size=3, padding=1),
+            nn.SiLU(),
+            nn.Conv1d(128, 256, kernel_size=3, padding=1),
+            nn.SiLU(),
+        )
+        self.pool = nn.AdaptiveAvgPool1d(1)  # (B, 256, 1)
+        # 4) ResNetMLP: 입력 256 → 출력 N-class
+        self.head = ResNetMLP(
+            input_dim=256, hidden_dim=256, num_blocks=2,
+            output_dim=output_dim, dropout=dropout, use_batchnorm=True
+        )
+
+    def forward(self, x):                       # x: (B, F)
+        x = self.pre_mlp(x)                     # (B, F)
+        x = self.transformer(x.unsqueeze(1))    # (B, 1, F)
+        x = x.squeeze(1).unsqueeze(1)           # (B, 1, F)
+        x = self.conv(x)                        # (B, 256, F)
+        x = self.pool(x).squeeze(-1)            # (B, 256)
+        out = self.head(x)                      # (B, output_dim)
+        return out

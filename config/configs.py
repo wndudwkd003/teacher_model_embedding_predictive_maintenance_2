@@ -39,7 +39,7 @@ class DataType(Enum):
     RAW = "RAW"
     GPT2 = "GPT2"
     BERT = "BERT"
-    GEMMA = "GEMMA"
+    GEMMA3 = "GEMMA3"
     ELECTRA = "ELECTRA"
     T5 = "T5"
 
@@ -97,7 +97,7 @@ class Config:
     teacher_frame_type: FrameType = FrameType.RAW_RAW
     teacher_model_type: ModelType = ModelType.XGBOOST
     student_frame_type: FrameType = FrameType.EMBEDDING_MIX_RAW
-    student_model_type: ModelType = ModelType.MLP
+    student_model_type: ModelType = ModelType.XGBOOST
 
     # XGBoost
     early_stopping_rounds: int = 10
@@ -111,4 +111,10 @@ class Config:
     raw_input_dim: int = 14
     embedding_input_dim: int = 768
     mix_input_dim: int = embedding_input_dim+raw_input_dim
+
+    # 교사모델 설정
+    temperature_t: float = 4.0
+    temperature_s: float = 4.0
+    alpha: float = 0.5
+
 
