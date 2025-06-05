@@ -61,7 +61,7 @@ class StackType(Enum):
 @dataclass
 class Config:
     # 학습 또는 평가 모드 설정하는 변수
-    run_mode: RunType = RunType.TEST
+    run_mode: RunType = RunType.TRAIN_TEST
 
     # 학습 하이퍼파라미터 변수
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
@@ -87,7 +87,7 @@ class Config:
     test_masking_data_stack_type: StackType = StackType.NO_STACK
 
     # 데이터 폴더
-    train_data_folder_stack_type: StackType = StackType.WITH_SMOTE_NO_STACK
+    train_data_folder_stack_type: StackType = StackType.WITH_SMOTE_NO_STACK # WITH_SMOTE_NO_STACK, STACK, NO_STACK
     test_data_folder_stack_type: StackType = StackType.NO_STACK
 
     # train path
@@ -109,19 +109,17 @@ class Config:
 
 
     # 학습 방법 설정
-    # 한 번 더 확 인 할 것
-    # ***************************************************************************************************
-    is_kd_mode: bool = False # False -> 무조건 student 모델의 설정대로 진행 ***************************************************************************************************
-    # ***************************************************************************************************
-
     teacher_data_type: DataType = DataType.RAW
     teacher_frame_type: FrameType = FrameType.RAW_RAW
     teacher_model_type: ModelType = ModelType.XGBOOST
-    teacher_model_save_path: str = "outputs/train_result_no_stack/RAW_RAW_XGBoost_RAW_20250604_191035"
+    teacher_model_save_path: str = "outputs/train_result_with_smote_no_stack/RAW_RAW_XGBoost_RAW_20250605_185006"
 
-    student_data_type: DataType = DataType.RAW
-    student_frame_type: FrameType = FrameType.RAW_RAW
-    student_model_type: ModelType = ModelType.XGBOOST
+    student_data_type: DataType = DataType.BERT
+    student_frame_type: FrameType = FrameType.EMBEDDING_MIX_LOGITS
+    student_model_type: ModelType = ModelType.RESNET_MLP
+
+    # 자동
+    is_kd_mode: bool = True if student_frame_type in [FrameType.EMBEDDING_MIX_LOGITS, FrameType.EMBEDDING_LOGITS, FrameType.RAW_LOGITS] else False
 
     # XGBoost
     early_stopping_rounds: int = 10
@@ -142,3 +140,7 @@ class Config:
     alpha: float = 0.5
 
 
+# CUDA_VISIBLE_DEVICES
+# cd /home/juyoung-lab/ws/dev_ws/pi2
+# conda activate py310
+# python train.py

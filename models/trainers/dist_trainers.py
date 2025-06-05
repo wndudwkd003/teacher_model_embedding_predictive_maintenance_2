@@ -24,7 +24,7 @@ class DistillationTrainer(TorchTrainerBase):
 
         # 딥러닝 또는 머신러닝 모델로 교사 모델 선택
 
-        teacher_trainer.load_model(cfg.teacher_model_save_path, "model_save", f"scen_{scen}")
+        teacher_trainer.load_model(os.path.join(cfg.teacher_model_save_path, "model_save"), f"scen_{scen}")
         self.teacher = TeacherWrapper(teacher_trainer, cfg.device).eval()
 
         for p in self.teacher.parameters():

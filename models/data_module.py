@@ -69,7 +69,7 @@ class DataManager:
         data_type: DataType = DataType.RAW,
     ):
         # FrameType에 따라 최종 입력 데이터를 구성
-        if frame_type == FrameType.RAW_RAW:
+        if frame_type in [FrameType.RAW_RAW, FrameType.RAW_LOGITS]:
             return raw_data
 
         # 임베딩 데이터 로드
