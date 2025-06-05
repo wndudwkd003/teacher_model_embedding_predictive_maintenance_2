@@ -1,5 +1,5 @@
 import xgboost as xgb
-from models.base_trainer import BaseTrainer
+from models.trainers.base_trainer import BaseTrainer
 from config.configs import Config
 from sklearn.metrics import classification_report
 import os

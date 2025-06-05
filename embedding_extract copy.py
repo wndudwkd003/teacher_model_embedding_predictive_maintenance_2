@@ -1,7 +1,7 @@
 
 """
 # 언어 모델의 임베딩을 추출하는 코드
-# CUDA_VISIBLE_DEVICES
+
 """
 
 import json
@@ -14,11 +14,11 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.model_selection import GroupShuffleSplit
+from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
 from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM, T5Tokenizer, T5EncoderModel
-from imblearn.over_sampling import SMOTE
+
 
 class JsonStringDataset(torch.utils.data.Dataset):
     def __init__(self, data): self.data = data
@@ -32,6 +32,9 @@ class ModelType(Enum):
     GEMMA3 = "google/gemma-3-1b-pt"
     T5 = "t5-base"
     ELECTRA = "google/electra-base-discriminator"
+    ALBERT = "albert-base-v2"
+    E5_BASE_V2 = "intfloat/e5-base-v2"
+    ALL_MINILM_L6_V2 = "sentence-transformers/all-MiniLM-L6-v2"
 
 
 class DataVersion(Enum):
@@ -46,17 +49,14 @@ class PhaseType(Enum):
 
 @dataclass
 class Config:
-    type: PhaseType = PhaseType.TRAIN
-    models: List[ModelType] = field(default_factory=lambda: [ModelType.BERT])
-    apply_smote: bool = True
-    data_stack_type: DataVersion = DataVersion.NO_STACK
-    smote_multiplier: float = 5.0 # SMOTE로 증강할 비율 (예: 5.0 -> 소수 클래스의 샘플 수를 5배로 증강)
-    k_neighbors_smote: int = 5 # SMOTE에서 사용할 k_neighbors 값
     seed: int = 42
-    batch_size: Dict[str, int] = field(default_factory=lambda: {"basic": 4, "smote": 4})
+    batch_size: Dict[str, int] = field(default_factory=lambda: {"basic": 4, "smote": 2})
     device: str = "cuda"
+    models: List[ModelType] = field(default_factory=lambda: [ModelType.BERT])
     dataset_select: List[str] = field(default_factory=lambda: ["FD001", "FD003"])
     dataset_path: str = "engine_knee_plots_multi/all_engines_labeled.csv"
+    type: PhaseType = PhaseType.MASKING_TEST
+    data_stack_type: DataVersion = DataVersion.NO_STACK
     feature_importance_path: str = "outputs/feature_importance/nasa_dataset/feature_importance.csv"
     drop_cols: List[str] = field(default_factory=lambda: ['unit','cycle','set1','set2','set3', 's1','s5','s6','s10','s16','s18','s19','state','dataset'])
     cols_rename_map: Dict[str, str] = field(default_factory=lambda: {
@@ -89,12 +89,7 @@ class Config:
             "state": "label",
             "dataset": "dataset_id"
         })
-
-    output_dir_base_name: str = "dataset_output"
-    output_dir: str = field(init=False)
-
-    def __post_init__(self):
-        self.output_dir = f"dataset_output_for_{self.type.value}_{self.data_stack_type.value}"
+    output_dir: str = f"dataset_output_for_{type.value}_{data_stack_type.value}"
 
 def seed_everything(seed):
     np.random.seed(seed)
@@ -110,13 +105,23 @@ def printi(msg: str):
     print(f"[INFO] {msg}")
 
 
+# def split_dataset(df: pd.DataFrame, dataset_select: List[str], seed: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
+#     selected_df = df[df["dataset"].isin(dataset_select)].copy()
+#     groups = selected_df["unit"]  # 'unit'은 나중에 'engine_id'로 이름 바뀌기 전 기준
+#     gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=seed)
+#     train_idx, test_idx = next(gss.split(selected_df, groups=groups))
+#     train_df = selected_df.iloc[train_idx].reset_index(drop=True)
+#     test_df = selected_df.iloc[test_idx].reset_index(drop=True)
+#     return train_df, test_df
+
 def split_dataset(df: pd.DataFrame, dataset_select: List[str], seed: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
     selected_df = df[df["dataset"].isin(dataset_select)].copy()
-    groups = selected_df["unit"]  # 'unit'은 나중에 'engine_id'로 이름 바뀌기 전 기준
-    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=seed)
-    train_idx, test_idx = next(gss.split(selected_df, groups=groups))
-    train_df = selected_df.iloc[train_idx].reset_index(drop=True)
-    test_df = selected_df.iloc[test_idx].reset_index(drop=True)
+
+    # GroupShuffleSplit 대신 train_test_split 사용
+    train_df, test_df = train_test_split(selected_df, test_size=0.2, random_state=seed, shuffle=True)
+
+    train_df = train_df.reset_index(drop=True)
+    test_df = test_df.reset_index(drop=True)
     return train_df, test_df
 
 
@@ -126,80 +131,56 @@ def main(config: Config):
     device = config.device if torch.cuda.is_available() else "cpu"
     printi(f"Using device: {device}")
 
-    if not (config.type == PhaseType.TRAIN and config.apply_smote):
-        os.makedirs(config.output_dir, exist_ok=True)
-    printi(f"Initial base output directory (before potential SMOTE modification): {config.output_dir}")
-
-
     df = pd.read_csv(config.dataset_path)
     train_df, test_df = split_dataset(df, config.dataset_select, config.seed)
 
-    X_train_orig, y_train_orig = train_df.drop(columns=config.drop_cols), train_df["state"]
-    X_test_orig, y_test_orig = test_df.drop(columns=config.drop_cols), test_df["state"]
+    X_train, y_train = train_df.drop(columns=config.drop_cols), train_df["state"]
+    X_test, y_test = test_df.drop(columns=config.drop_cols), test_df["state"]
 
-    common_float_cols_train = X_train_orig.select_dtypes(include="float").columns
-    X_train_orig[common_float_cols_train] = X_train_orig[common_float_cols_train].round(5)
+    float_cols = X_train.select_dtypes(include="float").columns
+    X_train[float_cols] = X_train[float_cols].round(5)
+    X_test[float_cols]  = X_test[float_cols].round(5)
 
-    common_float_cols_test = X_test_orig.select_dtypes(include="float").columns
-    X_test_orig[common_float_cols_test] = X_test_orig[common_float_cols_test].round(5)
+    X_train.rename(columns=config.cols_rename_map, inplace=True)
+    X_test.rename(columns=config.cols_rename_map, inplace=True)
 
-    X_train_to_process = X_train_orig.copy()
-    y_train_to_process = y_train_orig.copy() # Series 형태
-    X_test_to_process = X_test_orig.copy()
-    y_test_to_process = y_test_orig.copy() # Series 형태
 
-    original_config_output_dir = config.output_dir # 원래 output_dir 저장
-
+    # 학습용으로 임베딩 추출 -> 시나리오 0부터 센서 개수(16-1)까지 랜덤으로 결측 마스킹
     if config.type == PhaseType.TRAIN:
-        train_phase_name = "train"
-        y_df_for_train_scenario = y_train_to_process.to_frame(name='state') # apply_masking_scenario의 시그니처에 맞춤
+        """
+        # 계획
+        1. LM으로 임베딩을 추출할건데, SMOTE 증강 유무에 따라서 동시에 저장
+        2. SMOTE 증강은 5배수 고정
 
-        if config.apply_smote:
-            printi("Applying SMOTE to training data...")
+        # 마스킹 규칙
+        1. 시나리오 0 ~ 센서 개수-1까지 진행
+        2. 각 시나리오의 숫자 의미는 결측되는 센서의 개수를 의미하며 결측되는 센서는 랜덤 (시나리오 0은 결측X)
+        3. key(컬럼명): value(값)의 형태인 json string으로 각 행을 저장
+        4. LM에 json string을 넣고 임베딩 추출
 
-            # SMOTE용 output_dir 설정 (기존 config.output_dir 임시 변경)
-            smote_phase_descriptor = config.type.value + "_with_smote" # "train_with_smote"
-            config.output_dir = f"{config.output_dir_base_name}_for_{smote_phase_descriptor}_{config.data_stack_type.value}"
-            os.makedirs(config.output_dir, exist_ok=True)
-            printi(f"Output directory for SMOTE data temporarily set to: {config.output_dir}")
+        # 저장 규칙
+        1. 각 LM 이름별로 폴더를 만들고 그 안에 임베딩된 numpy 형태로 저장
+        2. raw 폴더 이름으로 원본 숫자 형태로 저장(마스킹 적용한 것)
+        3. y에 해당하는 내용은 전부 동일하므로 상위 폴더에 y_train.csv로 저장
+        4. SMOTE 증강의 유무에 따라 파일명 뒤에 _smote를 붙임
 
-            value_counts = y_train_to_process.value_counts()
-            min_class_label = value_counts.idxmin()
-            min_class_count = value_counts.min()
+        """
 
-            k_neighbors = min(config.k_neighbors_smote, min_class_count - 1) if min_class_count > 1 else 1
+        train_perm_idx = generate_random_permutation(config.seed, X_train)
+        apply_masking_scenario("train", X_train, train_perm_idx, y_train, config)
 
-            target_minority_samples = int(min_class_count * config.smote_multiplier)
-
-            sampling_strategy_dict = {min_class_label: target_minority_samples}
-            smote = SMOTE(random_state=config.seed, k_neighbors=k_neighbors, sampling_strategy=sampling_strategy_dict)
-
-            printi(f"SMOTE params: k_neighbors={k_neighbors}, sampling_strategy={sampling_strategy_dict}")
-            X_train_smote_np, y_train_smote_series = smote.fit_resample(X_train_to_process, y_train_to_process)
-
-            X_train_to_process = pd.DataFrame(X_train_smote_np, columns=X_train_to_process.columns)
-            y_train_to_process = pd.Series(y_train_smote_series, name=y_train_to_process.name) # Series로 유지
-            y_df_for_train_scenario = y_train_to_process.to_frame(name='state') # 변경된 y로 DataFrame 업데이트
-            printi(f"Training data shape after SMOTE: X={X_train_to_process.shape}, y={y_train_to_process.shape}")
-
-        X_train_to_process.rename(columns=config.cols_rename_map, inplace=True)
-        train_perm_idx = generate_random_permutation(config.seed, X_train_to_process)
-        apply_masking_scenario(train_phase_name, X_train_to_process, train_perm_idx, y_df_for_train_scenario, config)
-
-        # Validation 데이터 처리
-        X_test_to_process.rename(columns=config.cols_rename_map, inplace=True)
-        valid_perm_idx = generate_random_permutation(config.seed, X_test_to_process)
-        apply_masking_scenario("valid", X_test_to_process, valid_perm_idx, y_test_to_process.to_frame(name='state'), config)
+        test_perm_idx = generate_random_permutation(config.seed, X_test)
+        apply_masking_scenario("valid", X_test, test_perm_idx, y_test, config)
 
 
-    else: # PhaseType.MASKING_TEST
-        # MASKING_TEST 시에는 SMOTE 적용 안 함, 원래 config.output_dir 사용
-        config.output_dir = original_config_output_dir # 혹시 모르니 복원 (실제로는 TRAIN 블록을 안 타므로 변경 안됐을 것)
-        X_test_to_process.rename(columns=config.cols_rename_map, inplace=True)
-        test_perm_idx = generate_feature_importance_permutation(X_test_to_process, config)
-        apply_masking_scenario("valid", X_test_to_process, test_perm_idx, y_test_to_process.to_frame(name='state'), config)
+    # 테스트용으로 임베딩 추출 -> lgbm feature importance로 시나리오 순서대로 결측 마스킹
+    # 테스트용은 valid 데이터만 추출
+    else:
+        test_perm_idx = generate_feature_importance_permutation(X_test, config)
+        apply_masking_scenario("valid", X_test, test_perm_idx, y_test, config)
 
-    printi(f"End of embedding extraction process. Final base output directory was: {config.output_dir}")
+    printi(f"End of embedding extraction process -> {config.output_dir}")
+
 
 # np.concatenate([raw_masked_results[scen-1], masked_X], axis=0) if scen > 0 else masked_X
 
@@ -255,7 +236,7 @@ def apply_masking_scenario(phase: str, X_df: pd.DataFrame, train_perm_idx: np.nd
 
 def extract_lm_embedding(json_strings: List[str], model_type: ModelType, device: str) -> np.ndarray:
     # Load the tokenizer and model
-    if model_type in [ModelType.BERT, ModelType.ELECTRA]:
+    if model_type in [ModelType.BERT, ModelType.ELECTRA, ModelType.ALBERT, ModelType.ALL_MINILM_L6_V2, ModelType.E5_BASE_V2]:
         tokenizer = AutoTokenizer.from_pretrained(model_type.value)
         model = AutoModel.from_pretrained(model_type.value)
     elif model_type in [ModelType.GPT2, ModelType.GEMMA3]:
@@ -300,11 +281,25 @@ def extract_lm_embedding(json_strings: List[str], model_type: ModelType, device:
             inputs = {k: v.to(device) for k, v in inputs.items()}
             outputs = model(**inputs, output_hidden_states=True, return_dict=True)
 
-            last = outputs.hidden_states[-1] if outputs.hidden_states else outputs.last_hidden_state
-            mask = inputs["attention_mask"].unsqueeze(-1)          # (batch,L,1)
-            summed   = (last * mask).sum(dim=1)                    # PAD 제외 합
-            lengths  = mask.sum(dim=1).clamp(min=1)                # 0 나누기 방지
-            batch_emb = (summed / lengths).cpu().numpy()           # (batch, hidden)
+            if hasattr(outputs, 'hidden_states') and outputs.hidden_states is not None:
+                last_hidden = outputs.hidden_states[-1]
+            elif hasattr(outputs, 'last_hidden_state'):
+                last_hidden = outputs.last_hidden_state
+            else:
+                raise AttributeError(f"Model output for {model_type.name} does not have 'hidden_states' or 'last_hidden_state'")
+
+
+
+            # mask = inputs["attention_mask"].unsqueeze(-1)          # (batch,L,1)
+            # summed   = (last * mask).sum(dim=1)                    # PAD 제외 합
+            # lengths  = mask.sum(dim=1).clamp(min=1)                # 0 나누기 방지
+            # batch_emb = (summed / lengths).cpu().numpy()           # (batch, hidden)
+
+            attention_mask = inputs['attention_mask']
+            mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden.size()).float()
+            sum_embeddings = torch.sum(last_hidden * mask_expanded, 1)
+            sum_mask = torch.clamp(mask_expanded.sum(1), min=1e-9) # 0으로 나누는 것 방지
+            batch_emb = (sum_embeddings / sum_mask).cpu().numpy()
 
             embeddings.append(batch_emb)
 

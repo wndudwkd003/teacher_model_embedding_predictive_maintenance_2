@@ -1,6 +1,7 @@
 import os, numpy as np, pandas as pd, torch
 from typing import Tuple, Dict, Any
 from config.configs import DataType, FrameType, StackType
+from config.configs import Config
 from abc import ABC, abstractmethod
 
 class BaseLoader(ABC):
@@ -53,4 +54,103 @@ class DataFactory:
         y = np.concatenate(y, axis=0) if y[0] is not None else None
 
         return X, y
+
+
+
+class DataManager:
+    @staticmethod
+    def __prepare_features(
+        config: Config,
+        scen: int,
+        raw_data: np.ndarray,
+        phase: str = "train",
+        stack_type: StackType = StackType.STACK,
+        frame_type: FrameType = FrameType.RAW_RAW,
+        data_type: DataType = DataType.RAW,
+    ):
+        # FrameType에 따라 최종 입력 데이터를 구성
+        if frame_type == FrameType.RAW_RAW:
+            return raw_data
+
+        # 임베딩 데이터 로드
+        embedding_data, _ = DataFactory.load(
+            config.train_data_path,
+            phase,
+            scen,
+            data_type,
+            stack_type
+        )
+
+        if frame_type in [FrameType.EMBEDDING_RAW, FrameType.EMBEDDING_LOGITS]:
+            return embedding_data
+
+        elif frame_type in [FrameType.EMBEDDING_MIX_RAW, FrameType.EMBEDDING_MIX_LOGITS]:
+            return np.concatenate([raw_data, embedding_data], axis=1)
+
+
+    @staticmethod
+    def get_train_data(
+        current_pipe_path: str,
+        config: Config,
+        scen: int
+    ):
+        # 현재 파이프라인 경로에 따라 데이터 스택 타입을 결정
+        train_data_stack_type = config.train_data_stack_type
+        test_data_stack_type = config.test_data_stack_type
+
+        X_train_raw, y_train = DataFactory.load(current_pipe_path, "train", scen, DataType.RAW, train_data_stack_type)
+        X_valid_raw, y_valid = DataFactory.load(current_pipe_path, "valid", scen, DataType.RAW, test_data_stack_type)
+
+        if not config.is_kd_mode:
+            X_train = DataManager.__prepare_features(
+                config, scen, X_train_raw, "train", train_data_stack_type, config.student_frame_type, config.student_data_type
+            )
+            X_valid = DataManager.__prepare_features(
+                config, scen, X_valid_raw, "valid", test_data_stack_type, config.student_frame_type, config.student_data_type
+            )
+            return (X_train, y_train), (X_valid, y_valid)
+
+        else:
+            X_train_teacher = DataManager.__prepare_features(
+                config, scen, X_train_raw, "train", train_data_stack_type, config.teacher_frame_type, config.teacher_data_type
+            )
+            X_valid_teacher = DataManager.__prepare_features(
+                config, scen, X_valid_raw, "valid", test_data_stack_type, config.teacher_frame_type, config.teacher_data_type
+            )
+
+            X_train_student = DataManager.__prepare_features(
+                config, scen, X_train_raw, "train", train_data_stack_type, config.student_frame_type, config.student_data_type
+            )
+            X_valid_student = DataManager.__prepare_features(
+                config, scen, X_valid_raw, "valid", test_data_stack_type, config.student_frame_type, config.student_data_type
+            )
+            return (X_train_teacher, X_train_student, y_train), (X_valid_teacher, X_valid_student, y_valid)
+
+
+    @staticmethod
+    def get_masking_test_data(
+        current_pipe_path: str,
+        config: Config,
+        scen: int
+    ):
+        test_data_stack_type = config.test_masking_data_stack_type
+
+        X_valid_raw, y_valid = DataFactory.load(current_pipe_path, "valid", scen, DataType.RAW, test_data_stack_type)
+
+        if not config.is_kd_mode:
+
+            X_valid = DataManager.__prepare_features(
+                config, scen, X_valid_raw, "valid", test_data_stack_type, config.student_frame_type, config.student_data_type
+            )
+            return X_valid, y_valid
+
+        else:
+            X_valid_teacher = DataManager.__prepare_features(
+                config, scen, X_valid_raw, "valid", test_data_stack_type, config.teacher_frame_type, config.teacher_data_type
+            )
+
+            X_valid_student = DataManager.__prepare_features(
+                config, scen, X_valid_raw, "valid", test_data_stack_type, config.student_frame_type, config.student_data_type
+            )
+            return X_valid_teacher, X_valid_student, y_valid
 

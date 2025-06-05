@@ -11,6 +11,7 @@ class FrameType(Enum):
     EMBEDDING_RAW = "embedding_raw"
     EMBEDDING_LOGITS = "embedding_logits"
     EMBEDDING_MIX_RAW = "embedding_mix_raw"
+    EMBEDDING_MIX_LOGITS = "embedding_mix_logits"
 
 
 class ModelType(Enum):
@@ -53,13 +54,14 @@ class RunType(Enum):
 class StackType(Enum):
     STACK = "stack"
     NO_STACK = "no_stack"
+    WITH_SMOTE_NO_STACK = "with_smote_no_stack"
 
 
 
 @dataclass
 class Config:
     # 학습 또는 평가 모드 설정하는 변수
-    run_mode: RunType = RunType.TRAIN_TEST
+    run_mode: RunType = RunType.TEST
 
     # 학습 하이퍼파라미터 변수
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
@@ -77,26 +79,48 @@ class Config:
     # 시나리오 수
     train_scenario: List[int] = field(default_factory=lambda: list(range(14)))
 
-    # stack type
-    train_data_stack_type: StackType = StackType.NO_STACK
-    test_data_stack_type: StackType = StackType.NO_STACK
+    # 실제 학습 및 검증 시 데이터 설정
+    train_data_stack_type: StackType = StackType.STACK
+    test_data_stack_type: StackType = StackType.STACK
+
+    # 테스트 마스킹 데이터는 NO STACK 임
+    test_masking_data_stack_type: StackType = StackType.NO_STACK
+
+    # 데이터 폴더
+    train_data_folder_stack_type: StackType = StackType.WITH_SMOTE_NO_STACK
+    test_data_folder_stack_type: StackType = StackType.NO_STACK
 
     # train path
-    train_data_path: str = f"dataset_output_for_train_{train_data_stack_type.value}"
-    train_valid_result_path: str = f"outputs/train_result_{train_data_stack_type.value}"
+    # 데이터 세트가 저장된 경로
+    train_data_path: str = f"dataset_output_for_train_{train_data_folder_stack_type.value}"
+
+    # 학습 결과가 저장되는 경로
+    train_valid_result_path: str = f"outputs/train_result_{train_data_folder_stack_type.value}"
 
     # test path
-    test_data_path: str = f"dataset_output_for_masking_test_{test_data_stack_type.value}"
-    test_result_path: str = f"outputs/test_results_{test_data_stack_type.value}"
-    test_model_save_path: str = "outputs/train_result_no_stack/RAW_RAW_TabNet_20250518_165155"
+    # 데이터 세트가 저장된 경로
+    test_data_path: str = f"dataset_output_for_masking_test_{test_data_folder_stack_type.value}"
+
+    # 학습 결과가 저장되는 경로
+    test_result_path: str = f"outputs/test_results_{train_data_folder_stack_type.value}" \
+        if train_data_folder_stack_type == StackType.WITH_SMOTE_NO_STACK else f"outputs/test_results_{test_data_folder_stack_type.value}"
+
+    test_model_save_path: str = "outputs/train_result_with_smote_no_stack/RAW_RAW_XGBoost_RAW_20250605_185006"
 
 
     # 학습 방법 설정
-    is_kd_mode: bool = False # False -> 무조건 student 모델의 설정대로 진행
-    embedding_type: DataType = DataType.BERT
+    # 한 번 더 확 인 할 것
+    # ***************************************************************************************************
+    is_kd_mode: bool = False # False -> 무조건 student 모델의 설정대로 진행 ***************************************************************************************************
+    # ***************************************************************************************************
+
+    teacher_data_type: DataType = DataType.RAW
     teacher_frame_type: FrameType = FrameType.RAW_RAW
     teacher_model_type: ModelType = ModelType.XGBOOST
-    student_frame_type: FrameType = FrameType.EMBEDDING_MIX_RAW
+    teacher_model_save_path: str = "outputs/train_result_no_stack/RAW_RAW_XGBoost_RAW_20250604_191035"
+
+    student_data_type: DataType = DataType.RAW
+    student_frame_type: FrameType = FrameType.RAW_RAW
     student_model_type: ModelType = ModelType.XGBOOST
 
     # XGBoost

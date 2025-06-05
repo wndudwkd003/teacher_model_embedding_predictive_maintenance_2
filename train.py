@@ -10,9 +10,10 @@ import seaborn as sns
 import torch
 
 from config.configs import Config, DataType, ModelType, RunType, StackType, FrameType
-from models.data_module import DataFactory
+from models.data_module import DataFactory, DataManager
 from models.factories import TrainerFactory
 
+from utils.config_to_dict import config_to_dict
 import warnings
 from sklearn.exceptions import UndefinedMetricWarning
 
@@ -46,7 +47,15 @@ def main(config: Config):
     # train
     if config.run_mode in [RunType.TRAIN, RunType.TRAIN_TEST]:
         print("[INFO] Train Mode")
-        train_save_path = get_save_path(config.train_valid_result_path, config.student_frame_type, config.student_model_type, config.embedding_type, current_time)
+        train_save_path = get_save_path(config, current_time)
+
+        config_dict = config_to_dict(config)
+        config_json_path = os.path.join(train_save_path, "config.json")
+        with open(config_json_path, "w", encoding="utf-8") as f:
+            json.dump(config_dict, f, indent=2, ensure_ascii=False)
+        print(f"[INFO] Config saved to {config_json_path}")
+
+
         reports = []
         # train by scenario
         for scen in config.train_scenario:
@@ -72,6 +81,7 @@ def main(config: Config):
             save_dir = os.path.basename(model_path)
         model_scens_reports = []
         # test by scenario
+        print(f"[INFO] Model Path: {model_path}")
         for scen in config.train_scenario:
             print(f"[INFO] Current Scenario: {scen}")
             reports = test_pipe(scen, config, model_path)
@@ -173,53 +183,96 @@ def test_pipe(scen: int, config: Config, model_path: str):
 
     """
 
+    # test pipe는 masking 데이터 세트로 진행
+    current_pipe_path = config.test_data_path
+
     # model load
     trainer = TrainerFactory.build(config.student_model_type, config)
     trainer.load_model(os.path.join(model_path, "model_save"), f"scen_{scen}")
 
     # data load
     scen_reports = []
-    for i in config.train_scenario:
-        X_valid, y_valid = DataFactory.load(config.test_data_path, "valid", i, DataType.RAW, StackType.NO_STACK)
-        if config.student_frame_type != FrameType.RAW_RAW:
-            if config.student_frame_type == FrameType.EMBEDDING_MIX_RAW:
-                X_valid_raw = X_valid.copy()
+    for current_scen_for_test in config.train_scenario:
+        print(f"[INFO] Current Scenario for Test: {current_scen_for_test}")
+        if config.is_kd_mode:
+            teacher_X_valid, student_X_valid, y_valid = DataManager.get_masking_test_data(current_pipe_path, config, current_scen_for_test)
+            print(f"[INFO] KD Mode Valid Shapes | Teacher: {teacher_X_valid.shape}, Student: {student_X_valid.shape}, y: {y_valid.shape}")
 
-            X_valid, _ = DataFactory.load(config.test_data_path, "valid", i, config.embedding_type, StackType.NO_STACK)
+            report = trainer.eval(
+                student_X_valid, y_valid,
+                digits=5,
+                output_dict=True
+            )
 
-            if config.student_frame_type == FrameType.EMBEDDING_MIX_RAW:
-                X_valid = np.concatenate([X_valid_raw, X_valid], axis=1)
+        else:
+            X_valid, y_valid = DataManager.get_masking_test_data(current_pipe_path, config, current_scen_for_test)
+            print(f"[INFO] Standard Mode Valid Shape: {X_valid.shape}, {y_valid.shape}")
 
-        report = trainer.eval(X_valid, y_valid, digits=5, output_dict=True)
-        report["scenario"] = i
+            report = trainer.eval(
+                X_valid, y_valid,
+                digits=5,
+                output_dict=True
+            )
+
+        report["scenario"] = current_scen_for_test
         scen_reports.append(report)
 
     return scen_reports
 
 
 def train_pipe(scen: int, config: Config, save_path: str):
+    # train pipe는 일반 split 데이터 세트로 진행
+    current_pipe_path = config.train_data_path
+
     # data laod todo
-    X_train, y_train = DataFactory.load(config.train_data_path, "train", scen, DataType.RAW, StackType.STACK)
-    X_valid, y_valid = DataFactory.load(config.train_data_path, "valid", scen, DataType.RAW, StackType.STACK)
+    if config.is_kd_mode:
+        (teacher_X_train, student_X_train, y_train), \
+        (teacher_X_valid, student_X_valid, y_valid) = DataManager.get_train_data(current_pipe_path, config, scen)
+        print(f"[INFO] KD Mode Train Shapes | Teacher: {teacher_X_train.shape}, Student: {student_X_train.shape}, y: {y_train.shape}")
+        print(f"[INFO] KD Mode Valid Shapes | Teacher: {teacher_X_valid.shape}, Student: {student_X_valid.shape}, y: {y_valid.shape}")
 
-    if config.student_frame_type != FrameType.RAW_RAW:
-        if config.student_frame_type == FrameType.EMBEDDING_MIX_RAW:
-            X_train_raw = X_train.copy()
-            X_valid_raw = X_valid.copy()
+    else:
+        (X_train, y_train), (X_valid, y_valid) = DataManager.get_train_data(current_pipe_path, config, scen)
+        print(f"[INFO] Standard Mode Train Shape: {X_train.shape}, {y_train.shape}")
+        print(f"[INFO] Standard Mode Valid Shape: {X_valid.shape}, {y_valid.shape}")
 
-        X_train, _ = DataFactory.load(config.train_data_path, "train", scen, config.embedding_type, StackType.STACK)
-        X_valid, _ = DataFactory.load(config.train_data_path, "valid", scen, config.embedding_type, StackType.STACK)
-
-        if config.student_frame_type == FrameType.EMBEDDING_MIX_RAW:
-            X_train = np.concatenate([X_train_raw, X_train], axis=1)
-            X_valid = np.concatenate([X_valid_raw, X_valid], axis=1)
 
     # model trainer
-    trainer = TrainerFactory.build(config.student_model_type, config)
-    print(f"[INFO] Current train shape: {X_train.shape}, {y_train.shape}")
-    print(f"[INFO] Current valid shape: {X_valid.shape}, {y_valid.shape}")
-    trainer.fit(X_train, y_train, X_valid, y_valid, verbose=False)
-    report = trainer.eval(X_valid, y_valid, digits=5, output_dict=True)
+    if config.is_kd_mode:
+        trainer = TrainerFactory.build_distill_trainer(
+            config.student_model_type,
+            config.teacher_model_type,
+            config,
+            scen
+        )
+    else:
+        trainer = TrainerFactory.build(config.student_model_type, config)
+
+    if config.is_kd_mode:
+        # train
+        trainer.fit(
+            teacher_X_train, student_X_train, y_train,
+            teacher_X_valid, student_X_valid, y_valid,
+            verbose=False
+        )
+        # evaluation
+        report = trainer.eval(
+            student_X_valid, y_valid,
+            digits=5,
+            output_dict=True)
+    else:
+        # train
+        trainer.fit(
+            X_train, y_train,
+            X_valid, y_valid,
+            verbose=False
+        )
+        # evaluation
+        report = trainer.eval(
+            X_valid, y_valid,
+            digits=5,
+            output_dict=True
+        )
 
     # save path
     model_save_path = os.path.join(save_path, "model_save")
@@ -230,42 +283,89 @@ def train_pipe(scen: int, config: Config, save_path: str):
 
     return report
 
-def get_save_path(result_path: str, frame_type: FrameType, model_type: ModelType, embedding_type: DataType, current_time: str):
-    save_path = os.path.join(result_path, f"{frame_type.name}_{model_type.value}_{embedding_type.name}_{current_time}")
+def get_save_path(config: Config, current_time: str):
+    result_path = config.train_valid_result_path
+
+    if config.is_kd_mode:
+        teacher_frame_type = config.teacher_frame_type
+        teacher_model_type = config.teacher_model_type
+        teacher_data_type = config.teacher_data_type
+        student_frame_type = config.student_frame_type
+        student_model_type = config.student_model_type
+        student_data_type = config.student_data_type
+        save_path = os.path.join(
+            result_path,
+            f"{student_frame_type.name}_{student_model_type.value}_{student_data_type.name}_teacher_"
+            f"{teacher_frame_type.name}_{teacher_model_type.value}_{teacher_data_type.name}_"
+            f"{current_time}"
+        )
+
+    else:
+        student_frame_type = config.student_frame_type
+        student_model_type = config.student_model_type
+        student_data_type = config.student_data_type
+        save_path = os.path.join(
+            result_path,
+            f"{student_frame_type.name}_{student_model_type.value}_{student_data_type.name}_{current_time}"
+        )
+
     os.makedirs(save_path, exist_ok=True)
     return save_path
 
 if __name__ == "__main__":
     config = Config()
-
     parser = ArgumentParser()
+
+    # --- 기존 학생 모델 설정 인자 ---
     parser.add_argument(
-        "--student_frame_type",
-        type=str,
-        choices=[e.value for e in FrameType],
-        default=config.student_frame_type.value,
-        help="학생 모델이 사용할 FrameType"
+        "--student_frame_type", type=str, choices=[e.value for e in FrameType],
+        default=config.student_frame_type.value, help="학생 모델 FrameType"
     )
     parser.add_argument(
-        "--student_model_type",
-        type=str,
-        choices=[e.value for e in ModelType],
-        default=config.student_model_type.value,
-        help="학생 모델이 사용할 ModelType"
+        "--student_model_type", type=str, choices=[e.value for e in ModelType],
+        default=config.student_model_type.value, help="학생 모델 ModelType"
     )
     parser.add_argument(
-        "--embedding_type",
-        type=str,
-        choices=[e.value for e in DataType],
-        default=config.embedding_type.value,
-        help="임베딩 DataType"
+        "--student_data_type", type=str, choices=[e.value for e in DataType],
+        default=config.student_data_type.value, help="학생 모델 임베딩 DataType"
     )
+
+    # --- ✨ 교사 모델 및 KD 모드 설정 인자 추가 ---
+    parser.add_argument(
+        "--is_kd_mode", type=lambda x: (str(x).lower() == 'true'), # 문자열 'true'/'false'를 bool로 변환
+        default=config.is_kd_mode, help="지식 증류 모드 사용 여부 (True/False)"
+    )
+    parser.add_argument(
+        "--teacher_frame_type", type=str, choices=[e.value for e in FrameType],
+        default=config.teacher_frame_type.value, help="교사 모델 FrameType"
+    )
+    parser.add_argument(
+        "--teacher_model_type", type=str, choices=[e.value for e in ModelType],
+        default=config.teacher_model_type.value, help="교사 모델 ModelType"
+    )
+    parser.add_argument(
+        "--teacher_data_type", type=str, choices=[e.value for e in DataType],
+        default=config.teacher_data_type.value, help="교사 모델 DataType"
+    )
+    parser.add_argument(
+        "--teacher_model_save_path", type=str,
+        default=config.teacher_model_save_path, help="사전 학습된 교사 모델 경로"
+    )
+    # 필요한 경우, 다른 Config 변수들도 위와 같이 추가할 수 있습니다. (예: --lr, --batch_size 등)
 
     args = parser.parse_args()
+
+    # Config 객체 업데이트
     config.student_frame_type = FrameType(args.student_frame_type)
     config.student_model_type = ModelType(args.student_model_type)
-    config.embedding_type = DataType(args.embedding_type)
+    config.student_data_type = DataType(args.student_data_type)
+
+    config.is_kd_mode = args.is_kd_mode
+    config.teacher_frame_type = FrameType(args.teacher_frame_type)
+    config.teacher_model_type = ModelType(args.teacher_model_type)
+    config.teacher_data_type = DataType(args.teacher_data_type)
+    config.teacher_model_save_path = args.teacher_model_save_path
 
     seed_everything(config.seed)
-    print(config)
+    print(config) # 실행 전 최종 config 확인
     main(config)
